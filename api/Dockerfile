@@ -1,10 +1,13 @@
-FROM node:20-alpine
+# Dockerfile for API
+FROM node:18-alpine
 
 WORKDIR /app
+
 COPY package.json .
 RUN npm install
 
-COPY index.js .
+COPY . .
 
 EXPOSE 3000
-CMD ["node", "index.js"]
+
+CMD ["npm", "start"]

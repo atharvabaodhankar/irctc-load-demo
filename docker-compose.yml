@@ -1,1 +1,17 @@
-# Docker Compose configuration
+version: '3.8'
+
+services:
+  api:
+    build: ./api
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+
+  k6:
+    image: grafana/k6:latest
+    volumes:
+      - ./load-tests:/scripts
+    command: run /scripts/tatkal.js
+    depends_on:
+      - api
