@@ -1,17 +1,15 @@
-version: '3.8'
+version: "3.9"
 
 services:
   api:
     build: ./api
     ports:
       - "3000:3000"
-    environment:
-      - NODE_ENV=production
 
   k6:
-    image: grafana/k6:latest
+    image: grafana/k6
+    depends_on:
+      - api
     volumes:
       - ./load-tests:/scripts
     command: run /scripts/tatkal.js
-    depends_on:
-      - api
