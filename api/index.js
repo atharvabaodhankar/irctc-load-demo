@@ -1,14 +1,18 @@
-// API entry point
-const express = require('express');
+const express = require("express");
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+app.get("/search", async (req, res) => {
+  // simulate DB latency
+  await new Promise(r => setTimeout(r, 120));
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({
+    route: "MUM-DEL",
+    train: "12951",
+    availability: "WL/23",
+    source: "db"
+  });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(3000, () => {
+  console.log("API running on port 3000");
 });
