@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   api:
     build: ./api
@@ -5,12 +7,24 @@ services:
       - "3000:3000"
     depends_on:
       - scylladb
+      - redis
 
   scylladb:
-    image: scylladb/scylla
-    command: --smp 1 --memory 512M
+    image: scylladb/scylla:5.4
+    container_name: scylladb
+    command: --smp 2 --memory 1G
     ports:
       - "9042:9042"
+    volumes:
+      - scylla_data:/var/lib/scylla
+      - ./scylla/init.cql:/init.cql
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
 
   k6:
     image: grafana/k6
@@ -19,3 +33,7 @@ services:
     volumes:
       - ./load-tests:/scripts
     command: run /scripts/tatkal.js
+
+volumes:
+  scylla_data:
+  redis_data:
