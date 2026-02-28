@@ -1,14 +1,6 @@
 version: "3.9"
 
 services:
-  api:
-    build: ./api
-    ports:
-      - "3000:3000"
-    depends_on:
-      - scylladb
-      - redis
-
   scylladb:
     image: scylladb/scylla:5.4
     container_name: scylladb
@@ -18,6 +10,11 @@ services:
     volumes:
       - scylla_data:/var/lib/scylla
       - ./scylla/init.cql:/init.cql
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7
@@ -26,13 +23,21 @@ services:
     volumes:
       - redis_data:/data
 
-  k6:
-    image: grafana/k6
+  api:
+    build: ./api
+    ports:
+      - "3000:3000"
+    environment:
+      - USE_REDIS=${USE_REDIS:-false}
+      - MAX_INFLIGHT=${MAX_INFLIGHT:-500}
+      - CACHE_TTL=${CACHE_TTL:-30}
+      - SCYLLA_HOST=scylladb
+      - REDIS_HOST=redis
     depends_on:
-      - api
-    volumes:
-      - ./load-tests:/scripts
-    command: run /scripts/tatkal.js
+      scylladb:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
 volumes:
   scylla_data:
