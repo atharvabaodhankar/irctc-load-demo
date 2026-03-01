@@ -1,69 +1,101 @@
-const express = require("express");
-const redis = require("redis");
-const cassandra = require("cassandra-driver");
+const express = require('express');
+const cassandra = require('cassandra-driver');
+const redis = require('redis');
+const { USE_REDIS, MAX_INFLIGHT, CACHE_TTL } = require('./config');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+
 let inflight = 0;
-const MAX_INFLIGHT = 1000;
 
-/* Redis */
-const redisClient = redis.createClient({
-  url: "redis://redis:6379",
-});
-redisClient.connect();
-
-/* ScyllaDB */
+// ScyllaDB client
 const scyllaClient = new cassandra.Client({
-  contactPoints: ["scylladb"],
-  localDataCenter: "datacenter1",
-  keyspace: "irctc",
+  contactPoints: [process.env.SCYLLA_HOST || 'scylladb'],
+  localDataCenter: 'datacenter1',
+  keyspace: 'irctc'
 });
 
-app.get("/search", async (req, res) => {
-  if (inflight > MAX_INFLIGHT) {
-    return res.status(503).json({ error: "System busy, try again" });
-  }
+// Redis client (conditional)
+let redisClient = null;
+if (USE_REDIS) {
+  redisClient = redis.createClient({
+    url: `redis://${process.env.REDIS_HOST || 'redis'}:6379`
+  });
+  redisClient.connect().catch(console.error);
+}
 
-  inflight++;
-  try {
-    // existing logic
-  } finally {
-    inflight--;
-  }
+app.use(express.json());
 
-  const route = "MUM-DEL";
-  const date = "2026-02-20";
-  const cacheKey = `${route}:${date}`;
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok',
+    config: {
+      USE_REDIS,
+      MAX_INFLIGHT,
+      CACHE_TTL
+    },
+    inflight
+  });
+});
 
-  // 1️⃣ Check cache
-  const cached = await redisClient.get(cacheKey);
-  if (cached) {
-    return res.json({
-      source: "redis",
-      data: JSON.parse(cached),
+app.get('/search', async (req, res) => {
+  // Backpressure check
+  if (inflight >= MAX_INFLIGHT) {
+    return res.status(503).json({
+      error: "System busy",
+      reason: "backpressure",
+      inflight
     });
   }
 
-  // 2️⃣ Hit ScyllaDB
-  const query =
-    "SELECT train_no, status FROM availability WHERE route=? AND travel_date=?";
-  const result = await scyllaClient.execute(query, [route, date], {
-    prepare: true,
-  });
+  inflight++;
+  const startTime = Date.now();
 
-  const rows = result.rows;
+  try {
+    const { from, to, date } = req.query;
+    const route = `${from}-${to}`;
+    const cacheKey = `search:${route}:${date}`;
 
-  // 3️⃣ Cache result
-  await redisClient.setEx(cacheKey, 30, JSON.stringify(rows));
+    // Try Redis first if enabled
+    if (USE_REDIS && redisClient) {
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        return res.json({
+          data: JSON.parse(cached),
+          source: 'cache',
+          latency: Date.now() - startTime
+        });
+      }
+    }
 
-  res.json({
-    source: "scylladb",
-    data: rows,
-  });
+    // Fallback to ScyllaDB
+    const query = 'SELECT * FROM availability WHERE route = ? AND travel_date = ?';
+    const result = await scyllaClient.execute(query, [route, date], { prepare: true });
+
+    const data = result.rows;
+
+    // Cache the result if Redis is enabled
+    if (USE_REDIS && redisClient) {
+      await redisClient.setEx(cacheKey, CACHE_TTL, JSON.stringify(data));
+    }
+
+    res.json({
+      data,
+      source: 'database',
+      latency: Date.now() - startTime
+    });
+
+  } catch (error) {
+    console.error('Search error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    inflight--;
+  }
 });
 
-const server = app.listen(3000, () => {
-  console.log("API running on port 3000");
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Config: USE_REDIS=${USE_REDIS}, MAX_INFLIGHT=${MAX_INFLIGHT}, CACHE_TTL=${CACHE_TTL}`);
 });
 
 server.keepAliveTimeout = 65000;
