@@ -1,44 +1,64 @@
-version: "3.9"
-
 services:
-  scylladb:
-    image: scylladb/scylla:5.4
-    container_name: scylladb
-    command: --smp 2 --memory 1G
+  api:
+    build: ./api
+    deploy:
+      replicas: 3
+    environment:
+      - USE_REDIS=true
+      - MAX_INFLIGHT=400
+    depends_on:
+      scylladb:
+        condition: service_healthy
+      scylla-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
     ports:
-      - "9042:9042"
-    volumes:
-      - scylla_data:/var/lib/scylla
-      - ./scylla/init.cql:/init.cql
-    healthcheck:
-      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      - "3000:3000"
 
   redis:
     image: redis:7
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
 
-  api:
-    build: ./api
+  scylladb:
+    image: scylladb/scylla:5.4
+    command: --smp 2 --memory 1G
     ports:
-      - "3000:3000"
-    environment:
-      - USE_REDIS=${USE_REDIS:-false}
-      - MAX_INFLIGHT=${MAX_INFLIGHT:-500}
-      - CACHE_TTL=${CACHE_TTL:-30}
-      - SCYLLA_HOST=scylladb
-      - REDIS_HOST=redis
+      - "9042:9042"
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  scylla-init:
+    image: scylladb/scylla:5.4
     depends_on:
       scylladb:
         condition: service_healthy
-      redis:
-        condition: service_started
+    volumes:
+      - ./scylla/init.cql:/init.cql
+      - ./scylla/init.sh:/init.sh
+    entrypoint: ["/bin/bash", "/init.sh"]
+    restart: "no"
 
-volumes:
-  scylla_data:
-  redis_data:
+  k6:
+    image: grafana/k6
+    depends_on:
+      - api
+    volumes:
+      - ./load-tests:/scripts
+    command: run /scripts/tatkal-spike.js
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3001:3000"
